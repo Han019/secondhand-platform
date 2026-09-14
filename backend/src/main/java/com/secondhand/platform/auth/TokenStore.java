@@ -23,9 +23,9 @@ public class TokenStore {
     }
 
     //redis에 저장된 refresh token 비교
-    public boolean matchRefreshToken(String userId,String refreshToken){
-
-        return redisTemplate.opsForValue().get(REFRESH_PREFIX + userId).equals(refreshToken);
+    public boolean matchRefreshToken(Long userId,String refreshToken){
+        String storedToken = redisTemplate.opsForValue().get(REFRESH_PREFIX + userId);
+        return storedToken != null && storedToken.equals(refreshToken);
     }
 
     //로그아웃 시, Refresh Token 삭제
