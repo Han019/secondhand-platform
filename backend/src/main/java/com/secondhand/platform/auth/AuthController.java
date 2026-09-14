@@ -1,8 +1,6 @@
 package com.secondhand.platform.auth;
 
-import com.secondhand.platform.auth.dto.LoginRequest;
-import com.secondhand.platform.auth.dto.LoginResponse;
-import com.secondhand.platform.auth.dto.SignupRequest;
+import com.secondhand.platform.auth.dto.*;
 
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
@@ -55,6 +53,18 @@ public class AuthController {
     ){
         authService.logout(userId);
         return ResponseEntity.noContent().build();
+    }
+    @Operation(
+            summary = "Access Token 재발급",
+            description = ""
+    )
+    @PostMapping("/refresh")
+    public ResponseEntity<RefreshResponse> refresh(
+        @Valid @RequestBody RefreshRequest request
+    ){
+        RefreshResponse response = authService.refresh(request.refreshToken());
+
+        return ResponseEntity.ok(response);
     }
 
 

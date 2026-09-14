@@ -21,6 +21,17 @@ public class GlobalExceptionHandler {
                 new ErrorResponse(e.getMessage(), "LOGIN_FAILED")
         );
     }
+    @ExceptionHandler(InvalidTokenException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidToken(InvalidTokenException e){
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                new ErrorResponse(e.getMessage(), "INVALID_TOKEN")
+        );
+    }
 
-
+    @ExceptionHandler(TokenExpiredException.class)
+    public ResponseEntity<ErrorResponse> handleTokenExpired(TokenExpiredException e){
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                new ErrorResponse(e.getMessage(), "TOKEN_EXPIRED")
+        );
+    }
 }
