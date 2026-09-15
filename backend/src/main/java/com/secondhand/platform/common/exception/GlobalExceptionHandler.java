@@ -34,4 +34,18 @@ public class GlobalExceptionHandler {
                 new ErrorResponse(e.getMessage(), "TOKEN_EXPIRED")
         );
     }
+
+    @ExceptionHandler(ProductNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleProductNotFound(ProductNotFoundException e){
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
+                new ErrorResponse(e.getMessage(), "PRODUCT_NOT_FOUND")
+        );
+    }
+
+    @ExceptionHandler(ProductAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleProductAccessDenied(ProductAccessDeniedException e){
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                new ErrorResponse(e.getMessage(), "PRODUCT_ACCESS_DENIED")
+        );
+    }
 }

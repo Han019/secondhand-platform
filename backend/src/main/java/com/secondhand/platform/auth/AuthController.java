@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
-    private final UserService userService;
     //회원가입
     @Operation(
             summary = "회원가입",
