@@ -59,7 +59,7 @@ public class EmailService {
     public void sendVerificationEmail(String email){
         //이메일 중복이 아니면 통과
         if(userRepository.existsByEmail(email)){
-            throw new DuplicatedUserException("이미 등록된 이메일입니다.");
+            throw new DuplicatedUserException("이미 등록된 이메일입니다.","DUPLICATED_EMAIL");
         }
         String verificationCode = createVerificationCode();
 
