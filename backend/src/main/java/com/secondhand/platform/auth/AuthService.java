@@ -14,7 +14,6 @@ import com.secondhand.platform.user.User;
 import com.secondhand.platform.user.UserRepository;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,14 +62,14 @@ public class AuthService {
         //이미 있는 이메일인지, 이미 있는 닉네임인지, 이미 있는 loginId인지
         //이미 있는 이메일이라면
         if(userRepository.existsByEmail(signupRequest.email())){
-            throw new DuplicatedUserException("이미 가입된 이메일입니다.");
+            throw new DuplicatedUserException("이미 가입된 이메일입니다.","DUPLICATED_EMAIL");
         }
         //이미 있는 닉네임인지
         if(userRepository.existsByNickname(signupRequest.nickname())){
-            throw new DuplicatedUserException("이미 사용중인 닉네임입니다.");
+            throw new DuplicatedUserException("이미 사용중인 닉네임입니다.","DUPLICATED_NICKNAME");
         }
         if (userRepository.existsByLoginId(signupRequest.loginId())){
-            throw new DuplicatedUserException("이미 사용중인 id입니다.");
+            throw new DuplicatedUserException("이미 사용중인 id입니다.","DUPLICATED_LOGIN_ID");
         }
         //db에다 저장해야함
         //비번은 암호화해서
@@ -117,4 +116,12 @@ public class AuthService {
         return new RefreshResponse(newAccessToken);
     }
 
+    //닉네임 중복 있으면 false, 없으면 true
+    public boolean checkNickname(String nickname){
+        return !userRepository.existsByNickname(nickname);
+    }
+    // loginId 중복 있으면 false, 없으면 true
+    public boolean checkLoginId(String loginId){
+        return !userRepository.existsByLoginId(loginId);
+    }
 }
