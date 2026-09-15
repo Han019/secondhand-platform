@@ -2,6 +2,7 @@ package com.secondhand.platform.auth;
 
 import com.secondhand.platform.auth.dto.*;
 
+import com.secondhand.platform.user.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final UserService userService;
     //회원가입
     @Operation(
             summary = "회원가입",
@@ -67,6 +69,15 @@ public class AuthController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping("/check/login-id")
+    public ResponseEntity<AvailabilityResponse> checkLoginId(@RequestParam("loginId") String loginId){
+        return ResponseEntity.ok(new AvailabilityResponse(authService.checkLoginId(loginId)));
+    }
+
+    @GetMapping("/check/nickname")
+    public ResponseEntity<AvailabilityResponse> checkNickname(@RequestParam("nickname") String nickname){
+        return ResponseEntity.ok(new AvailabilityResponse(authService.checkNickname(nickname)));
+    }
 
 
     @PostMapping("/email/send")
