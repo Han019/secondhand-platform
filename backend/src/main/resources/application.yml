@@ -20,6 +20,12 @@ jwt:
   refresh-token-expire-time: 7d
 server:
   port: 8080
+supabase:
+  endpoint: ${SUPABASE_URL}
+  region: ${SUPABASE_REGION}
+  access-key: ${SUPABSE_ACCESS_KEY}
+  secret-key: ${SUPABASE_SECRET_KEY}
+  bucket: ${SUPABASE_BUCKET}
 
 springdoc:
   api-docs: 
