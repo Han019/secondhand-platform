@@ -42,6 +42,20 @@ public class GlobalExceptionHandler {
         );
     }
 
+    @ExceptionHandler(ProductImageNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleProductImageNotFound(ProductImageNotFoundException e){
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
+                new ErrorResponse(e.getMessage(), "PRODUCT_IMAGE_NOT_FOUND")
+        );
+    }
+
+    @ExceptionHandler(InvalidProductImageRequestException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidProductImageRequest(InvalidProductImageRequestException e){
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+                new ErrorResponse(e.getMessage(), "INVALID_PRODUCT_IMAGE_REQUEST")
+        );
+    }
+
     @ExceptionHandler(ProductAccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleProductAccessDenied(ProductAccessDeniedException e){
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
