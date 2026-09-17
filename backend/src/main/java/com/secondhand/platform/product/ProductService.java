@@ -3,6 +3,7 @@ package com.secondhand.platform.product;
 import com.secondhand.platform.common.exception.ProductAccessDeniedException;
 import com.secondhand.platform.common.exception.ProductNotFoundException;
 import com.secondhand.platform.product.dto.*;
+import com.secondhand.platform.productimage.ProductImageService;
 import com.secondhand.platform.user.User;
 import com.secondhand.platform.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +20,8 @@ public class ProductService {
 
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
+    private final ProductImageService productImageService;
+
     //로그인한 userid로 user 조회해서 Product 만들기
     @Transactional
     public void createProduct(ProductCreateRequest request, Long userId){
@@ -60,6 +63,8 @@ public class ProductService {
         if(!product.getSeller().getId().equals(userId)){
             throw new ProductAccessDeniedException("삭제 권한이 없습니다.");
         }
+
+        productImageService.deleteImages(productId,userId);
         productRepository.delete(product);
     }
     //product들 조회

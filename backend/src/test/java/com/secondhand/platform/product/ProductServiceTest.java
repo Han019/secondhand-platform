@@ -7,6 +7,7 @@ import com.secondhand.platform.product.dto.ProductDetailResponse;
 import com.secondhand.platform.product.dto.ProductResponse;
 import com.secondhand.platform.product.dto.ProductStatusRequest;
 import com.secondhand.platform.product.dto.ProductUpdateRequest;
+import com.secondhand.platform.productimage.ProductImageService;
 import com.secondhand.platform.user.User;
 import com.secondhand.platform.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,13 +35,16 @@ class ProductServiceTest {
     private ProductRepository productRepository;
 
     @Mock
+    private ProductImageService productImageService;
+
+    @Mock
     private User seller;
 
     private ProductService productService;
 
     @BeforeEach
     void setUp() {
-        productService = new ProductService(userRepository, productRepository);
+        productService = new ProductService(userRepository, productRepository, productImageService);
     }
 
     @Test
@@ -123,6 +127,7 @@ class ProductServiceTest {
 
         productService.deleteProduct(1L, 10L);
 
+        verify(productImageService).deleteImages(10L, 1L);
         verify(productRepository).delete(product);
     }
 

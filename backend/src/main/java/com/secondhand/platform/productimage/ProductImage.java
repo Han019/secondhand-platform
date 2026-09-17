@@ -3,10 +3,11 @@ package com.secondhand.platform.productimage;
 import com.secondhand.platform.product.Product;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
-
+@Getter
 @Entity
-@NoArgsConstructor(AccessLevel.PROTECTED)
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Table(name ="images")
 public class ProductImage {
     @Id
@@ -19,4 +20,13 @@ public class ProductImage {
 
     private String imagePath;
     private Integer sortOrder;
+    public ProductImage(
+            Product product,
+            String imagePath,
+            Integer sortOrder
+    ) {
+       this.product = product;
+       this.imagePath = imagePath;
+       this.sortOrder = sortOrder;
+    }
 }
