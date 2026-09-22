@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 
 @SpringBootTest(properties = {
         "jwt.secret=product-api-test-secret-key-at-least-32-bytes",
@@ -87,10 +88,29 @@ class ProductSecurityIntegrationTest {
     }
 
     @Test
+    @DisplayName("상품 등록 문서는 JSON 상품 정보와 이미지 파일을 multipart로 안내한다")
+    void createProduct_documentsMultipartParts() throws Exception {
+        mockMvc.perform(get("/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$['paths']['/api/products']['post']['requestBody']['content']['multipart/form-data']['encoding']['product']['contentType']")
+                        .value("application/json"))
+                .andExpect(jsonPath("$['paths']['/api/products']['post']['requestBody']['content']['multipart/form-data']['schema']['properties']['product']").exists())
+                .andExpect(jsonPath("$['paths']['/api/products']['post']['requestBody']['content']['multipart/form-data']['schema']['properties']['image']").exists());
+    }
+
+    @Test
     @DisplayName("상품 목록 조회는 인증 없이 접근할 수 있다")
     void getProducts_allowsAnonymousAccess() throws Exception {
         mockMvc.perform(get("/api/products"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("상품 목록 문서는 정렬을 별도 쿼리 파라미터로 안내한다")
+    void getProducts_documentsSortParameter() throws Exception {
+        mockMvc.perform(get("/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$['paths']['/api/products']['get']['parameters'][?(@.name == 'sort')]").isNotEmpty());
     }
 
     @Test
@@ -109,6 +129,16 @@ class ProductSecurityIntegrationTest {
                 .andExpect(jsonPath("$.content[0].title").value("아이패드 저가"))
                 .andExpect(jsonPath("$.totalElements").value(2))
                 .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 상품 정렬 필드는 400으로 거부한다")
+    void getProducts_rejectsUnknownSortProperty() throws Exception {
+        mockMvc.perform(get("/api/products")
+                        .param("keyword", "자전거")
+                        .param("sort", "true"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_SORT"));
     }
 
     @Test
@@ -169,7 +199,8 @@ class ProductSecurityIntegrationTest {
                         .header("Authorization", "Bearer " + accessToken)
                         .file(productPart())
                         .file(imagePart()))
-                .andExpect(status().isCreated());
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.productId").isNumber());
 
         assertThat(productRepository.findAll())
                 .singleElement()
@@ -179,6 +210,23 @@ class ProductSecurityIntegrationTest {
                     assertThat(product.getPrice()).isEqualTo(100_000L);
                 });
         assertThat(productImageRepository.findAll()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("상품 소유자는 이미지가 있는 상품을 삭제할 수 있다")
+    void deleteProduct_deletesProductAndImages() throws Exception {
+        Product product = productRepository.save(new Product(
+                seller, "자전거", "설명", 100_000L, null, null, "서울"));
+        productImageRepository.save(new ProductImage(product, "products/delete.jpg", 0));
+
+        mockMvc.perform(delete("/api/products/" + product.getId())
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isNoContent());
+
+        assertThat(productRepository.findById(product.getId())).isEmpty();
+        assertThat(productImageRepository.findAll()).isEmpty();
+        assertThat(pendingImageDeletionRepository.findAll()).isEmpty();
+        verify(s3Client).deleteObject(any(DeleteObjectRequest.class));
     }
 
     @Test

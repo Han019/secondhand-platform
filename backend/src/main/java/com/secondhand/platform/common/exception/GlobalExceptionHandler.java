@@ -1,6 +1,7 @@
 package com.secondhand.platform.common.exception;
 
 import com.secondhand.platform.common.exception.dto.ErrorResponse;
+import org.springframework.data.core.PropertyReferenceException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -8,6 +9,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(PropertyReferenceException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidSort(PropertyReferenceException e) {
+        return ResponseEntity.badRequest().body(
+                new ErrorResponse("지원하지 않는 정렬 기준: " + e.getPropertyName(), "INVALID_SORT")
+        );
+    }
 
     @ExceptionHandler(DuplicatedUserException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateUser(DuplicatedUserException e){

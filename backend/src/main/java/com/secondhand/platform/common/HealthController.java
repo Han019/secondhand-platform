@@ -14,7 +14,7 @@ import java.util.Map;
 public class HealthController {
 
     @GetMapping("/health")
-    @Operation(summary = "서비스 상태 확인")
+    @Operation(summary = "서비스 상태 확인", description = "서비스가 실행 중이면 status=UP을 반환합니다.")
     public Map<String, String> health() {
         return Map.of("status", "UP");
     }

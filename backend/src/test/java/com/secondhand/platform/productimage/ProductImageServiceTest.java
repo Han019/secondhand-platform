@@ -1,5 +1,6 @@
 package com.secondhand.platform.productimage;
 
+import com.secondhand.platform.common.exception.InvalidProductImageRequestException;
 import com.secondhand.platform.common.exception.ProductImageNotFoundException;
 import com.secondhand.platform.product.Product;
 import com.secondhand.platform.product.ProductRepository;
@@ -29,6 +30,7 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -116,19 +118,33 @@ class ProductImageServiceTest {
     }
 
     @Test
-    @DisplayName("추가 업로드는 같은 상품의 기존 최대 순서 다음부터 저장한다")
+    @DisplayName("이미지 9장이 있으면 1장을 추가해 10장까지 저장한다")
     void uploadImages_startsAfterExistingSortOrder() throws Exception {
         givenOwnedProduct(10L, 1L);
         ProductImage last = mock(ProductImage.class);
-        when(last.getSortOrder()).thenReturn(2);
+        when(last.getSortOrder()).thenReturn(8);
         when(productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(10L))
-                .thenReturn(List.of(last));
+                .thenReturn(Collections.nCopies(9, last));
         TransactionSynchronizationManager.initSynchronization();
 
         productImageService.uploadImages(List.of(image()), 10L, 1L);
 
         verify(productImageRepository).saveAll(argThat(saved ->
-                saved.iterator().next().getSortOrder() == 3));
+                saved.iterator().next().getSortOrder() == 9));
+    }
+
+    @Test
+    @DisplayName("기존 이미지와 새 이미지의 합계가 10장을 넘으면 업로드 전에 거부한다")
+    void uploadImages_rejectsMoreThanTenImagesInTotal() throws Exception {
+        givenOwnedProduct(10L, 1L);
+        when(productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(10L))
+                .thenReturn(Collections.nCopies(9, productImage));
+
+        assertThatThrownBy(() -> productImageService.uploadImages(List.of(image(), image()), 10L, 1L))
+                .isInstanceOf(InvalidProductImageRequestException.class);
+
+        verifyNoInteractions(s3Client);
+        verify(productImageRepository, never()).saveAll(anyList());
     }
 
     @Test
@@ -167,7 +183,7 @@ class ProductImageServiceTest {
 
         verify(pendingImageDeletionRepository).saveAll(argThat(pending ->
                 pending.iterator().next().getImagePath().equals("products/image-1.jpg")));
-        verify(productImageRepository).deleteAllInBatch(List.of(productImage));
+        verify(productImageRepository).deleteAll(List.of(productImage));
         verifyNoInteractions(s3Client, productImageCleanupService);
 
         TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
@@ -190,7 +206,7 @@ class ProductImageServiceTest {
 
     @Test
     @DisplayName("전체 이미지 삭제는 커밋 후에만 S3 삭제를 요청한다")
-    void deleteImages_deletesStorageAndDatabaseInBatch() {
+    void deleteImages_deletesStorageAndDatabase() {
         ProductImage first = mock(ProductImage.class);
         ProductImage second = mock(ProductImage.class);
         List<ProductImage> images = List.of(first, second);
@@ -205,7 +221,7 @@ class ProductImageServiceTest {
         productImageService.deleteImages(10L, 1L);
 
         verifyNoInteractions(s3Client, productImageCleanupService);
-        verify(productImageRepository).deleteAllInBatch(images);
+        verify(productImageRepository).deleteAll(images);
         TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
         verify(productImageCleanupService).deletePendingImage("products/image-1.jpg");
         verify(productImageCleanupService).deletePendingImage("products/image-2.jpg");
@@ -213,7 +229,7 @@ class ProductImageServiceTest {
 
     @Test
     @DisplayName("선택한 여러 이미지는 롤백하면 S3에서 삭제하지 않는다")
-    void deleteImages_deletesSelectedImagesInBatch() {
+    void deleteImages_deletesSelectedImages() {
         ProductImage first = mock(ProductImage.class);
         ProductImage second = mock(ProductImage.class);
         List<ProductImage> images = List.of(first, second);
@@ -227,7 +243,7 @@ class ProductImageServiceTest {
 
         productImageService.deleteImages(10L, 1L, List.of(100L, 200L));
 
-        verify(productImageRepository).deleteAllInBatch(images);
+        verify(productImageRepository).deleteAll(images);
         TransactionSynchronizationManager.getSynchronizations().forEach(
                 synchronization -> synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
         verifyNoInteractions(s3Client, productImageCleanupService);
@@ -260,7 +276,7 @@ class ProductImageServiceTest {
                 .isInstanceOf(ProductImageNotFoundException.class);
 
         verifyNoInteractions(s3Client);
-        verify(productImageRepository, never()).deleteAllInBatch(anyList());
+        verify(productImageRepository, never()).deleteAll(anyList());
     }
 
     @Test
@@ -273,7 +289,7 @@ class ProductImageServiceTest {
         productImageService.deleteImages(10L, 1L);
 
         verifyNoInteractions(s3Client);
-        verify(productImageRepository, never()).deleteAllInBatch(anyList());
+        verify(productImageRepository, never()).deleteAll(anyList());
     }
 
     private void givenOwnedProduct(Long productId, Long userId) {

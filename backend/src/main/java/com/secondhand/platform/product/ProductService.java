@@ -30,7 +30,7 @@ public class ProductService {
 
     //로그인한 userid로 user 조회해서 Product 만들기
     @Transactional(rollbackFor = IOException.class)
-    public void createProduct(ProductCreateRequest request, List<MultipartFile> images, Long userId) throws IOException {
+    public Long createProduct(ProductCreateRequest request, List<MultipartFile> images, Long userId) throws IOException {
         User seller = userRepository.findById(userId).orElseThrow(
                 () -> new IllegalArgumentException("없는 사용자입니다."));
         Product product = new Product(
@@ -45,6 +45,7 @@ public class ProductService {
 
         productRepository.save(product);
         productImageService.uploadImages(images, product.getId(), userId);
+        return product.getId();
     }
     //로그인한 userId와 ProductId 조회해서 수정하기
     @Transactional
@@ -76,13 +77,17 @@ public class ProductService {
     }
     //product들 조회
     public Page<ProductResponse> getProducts(String keyword, Pageable pageable) {
+
+        Page<Product> products;
+
         if (keyword == null || keyword.isBlank()) {
-            return productRepository.findAll(pageable).map(ProductResponse::from);
+            products = productRepository.findAll(pageable);
+        }else{
+            String key = keyword.trim();
+            products = productRepository.findByTitleContainingOrDescriptionContaining(key, key, pageable);
         }
 
-        String key = keyword.trim();
-        return productRepository.findByTitleContainingOrDescriptionContaining(key, key, pageable)
-                .map(ProductResponse::from);
+        return products.map(this::toListResponse);
     }
 
     //단건 조회
@@ -111,6 +116,15 @@ public class ProductService {
             throw new ProductAccessDeniedException("이미 판매 완료된 상품입니다.");
         }
         product.changeStatus(request.status());
+    }
+
+    private ProductResponse toListResponse(Product product) {
+        String imageUrl = productImageRepository
+                .findFirstByProduct_IdOrderBySortOrderAsc(product.getId())
+                .map(image -> productImageService.generateSignedUrl(image.getImagePath()))
+                .orElse(null);
+
+        return ProductResponse.from(product, imageUrl);
     }
 
 }
