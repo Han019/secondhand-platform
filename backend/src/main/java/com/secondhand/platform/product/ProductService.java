@@ -4,12 +4,17 @@ import com.secondhand.platform.common.exception.ProductAccessDeniedException;
 import com.secondhand.platform.common.exception.ProductNotFoundException;
 import com.secondhand.platform.product.dto.*;
 import com.secondhand.platform.productimage.ProductImageService;
+import com.secondhand.platform.productimage.ProductImageRepository;
 import com.secondhand.platform.user.User;
 import com.secondhand.platform.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 //예외처리 만들기
@@ -21,10 +26,11 @@ public class ProductService {
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
     private final ProductImageService productImageService;
+    private final ProductImageRepository productImageRepository;
 
     //로그인한 userid로 user 조회해서 Product 만들기
-    @Transactional
-    public void createProduct(ProductCreateRequest request, Long userId){
+    @Transactional(rollbackFor = IOException.class)
+    public void createProduct(ProductCreateRequest request, List<MultipartFile> images, Long userId) throws IOException {
         User seller = userRepository.findById(userId).orElseThrow(
                 () -> new IllegalArgumentException("없는 사용자입니다."));
         Product product = new Product(
@@ -38,6 +44,7 @@ public class ProductService {
         );
 
         productRepository.save(product);
+        productImageService.uploadImages(images, product.getId(), userId);
     }
     //로그인한 userId와 ProductId 조회해서 수정하기
     @Transactional
@@ -68,10 +75,14 @@ public class ProductService {
         productRepository.delete(product);
     }
     //product들 조회
-    public List<ProductResponse> getProducts(){
-        List<Product> products = productRepository.findAll();
+    public Page<ProductResponse> getProducts(String keyword, Pageable pageable) {
+        if (keyword == null || keyword.isBlank()) {
+            return productRepository.findAll(pageable).map(ProductResponse::from);
+        }
 
-        return products.stream().map(ProductResponse::from).toList();
+        String key = keyword.trim();
+        return productRepository.findByTitleContainingOrDescriptionContaining(key, key, pageable)
+                .map(ProductResponse::from);
     }
 
     //단건 조회
@@ -79,7 +90,12 @@ public class ProductService {
         Product product = productRepository.findById(productId).orElseThrow(
                 ()-> new ProductNotFoundException("없는 상품입니다.", productId));
 
-        return ProductDetailResponse.from(product);
+        List<ProductDetailResponse.ImageResponse> images = productImageRepository
+                .findAllByProduct_IdOrderBySortOrderAsc(productId).stream()
+                .map(image -> new ProductDetailResponse.ImageResponse(
+                        image.getId(), productImageService.generateSignedUrl(image.getImagePath())))
+                .toList();
+        return ProductDetailResponse.from(product, images);
     }
 
     //판매 상태 변경
@@ -96,4 +112,5 @@ public class ProductService {
         }
         product.changeStatus(request.status());
     }
+
 }

@@ -9,7 +9,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableHandlerMethodArgumentResolver;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -37,7 +44,9 @@ class ProductControllerTest {
     @BeforeEach
     void setUp() {
         mockMvc = standaloneSetup(new ProductController(productService))
-                .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
+                .setCustomArgumentResolvers(
+                        new AuthenticationPrincipalArgumentResolver(),
+                        new PageableHandlerMethodArgumentResolver())
                 .build();
     }
 
@@ -51,38 +60,44 @@ class ProductControllerTest {
     void createProduct_returnsCreated() throws Exception {
         authenticate(1L);
 
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(validRequestJson()))
+        mockMvc.perform(multipart("/api/products")
+                        .file(productPart())
+                        .file(imagePart()))
                 .andExpect(status().isCreated())
                 .andExpect(content().string(""));
 
-        verify(productService).createProduct(any(), eq(1L));
+        verify(productService).createProduct(any(), any(), eq(1L));
     }
 
     @Test
-    @DisplayName("GET /api/products는 상품 목록을 반환한다")
+    @DisplayName("GET /api/products는 검색어와 가격 정렬을 전달하고 페이지 정보를 반환한다")
     void getProducts_returnsProducts() throws Exception {
-        when(productService.getProducts()).thenReturn(List.of(
+        Pageable pageable = PageRequest.of(0, 10, Sort.by("price").ascending());
+        when(productService.getProducts(eq("자전거"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
                 new ProductResponse(10L, "자전거", 100_000L, ProductStatus.ON_SALE, "서울시 동대문구")
-        ));
+        ), pageable, 1));
 
-        mockMvc.perform(get("/api/products"))
+        mockMvc.perform(get("/api/products").param("keyword", "자전거").param("sort", "price,asc"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value(10))
-                .andExpect(jsonPath("$[0].title").value("자전거"))
-                .andExpect(jsonPath("$[0].price").value(100_000))
-                .andExpect(jsonPath("$[0].status").value("ON_SALE"));
+                .andExpect(jsonPath("$.content[0].id").value(10))
+                .andExpect(jsonPath("$.content[0].title").value("자전거"))
+                .andExpect(jsonPath("$.content[0].price").value(100_000))
+                .andExpect(jsonPath("$.content[0].status").value("ON_SALE"))
+                .andExpect(jsonPath("$.totalElements").value(1));
+
+        verify(productService).getProducts("자전거", pageable);
     }
 
     @Test
-    @DisplayName("상품 목록이 없으면 빈 배열을 반환한다")
+    @DisplayName("상품 목록이 없으면 빈 페이지를 반환한다")
     void getProducts_returnsEmptyArray() throws Exception {
-        when(productService.getProducts()).thenReturn(List.of());
+        when(productService.getProducts(eq(null), any(Pageable.class)))
+                .thenReturn(Page.empty(PageRequest.of(0, 10, Sort.by("id").descending())));
 
         mockMvc.perform(get("/api/products"))
                 .andExpect(status().isOk())
-                .andExpect(content().json("[]"));
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(0));
     }
 
     @Test
@@ -124,7 +139,8 @@ class ProductControllerTest {
                         "서울시 동대문구",
                         null,
                         null,
-                        new ProductDetailResponse.SellerResponse(1L, "판매자", "profile.jpg", 36.5)
+                        new ProductDetailResponse.SellerResponse(1L, "판매자", "profile.jpg", 36.5),
+                        List.of(new ProductDetailResponse.ImageResponse(100L, "https://example.com/photo.jpg"))
                 )
         );
 
@@ -141,7 +157,9 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.seller.id").value(1))
                 .andExpect(jsonPath("$.seller.nickname").value("판매자"))
                 .andExpect(jsonPath("$.seller.profileImage").value("profile.jpg"))
-                .andExpect(jsonPath("$.seller.mannerScore").value(36.5));
+                .andExpect(jsonPath("$.seller.mannerScore").value(36.5))
+                .andExpect(jsonPath("$.images[0].id").value(100))
+                .andExpect(jsonPath("$.images[0].url").value("https://example.com/photo.jpg"));
 
         verify(productService).getProduct(10L);
     }
@@ -151,9 +169,8 @@ class ProductControllerTest {
     void createProduct_rejectsInvalidBody() throws Exception {
         authenticate(1L);
 
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
+        mockMvc.perform(multipart("/api/products")
+                        .file(new MockMultipartFile("product", "", "application/json", """
                                 {
                                   "title": "",
                                   "description": "",
@@ -162,7 +179,8 @@ class ProductControllerTest {
                                   "longitude": 126.9780,
                                   "address": ""
                                 }
-                                """))
+                                """.getBytes()))
+                        .file(imagePart()))
                 .andExpect(status().isBadRequest());
     }
 
@@ -171,9 +189,18 @@ class ProductControllerTest {
     void createProduct_rejectsMalformedJson() throws Exception {
         authenticate(1L);
 
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"title\":"))
+        mockMvc.perform(multipart("/api/products")
+                        .file(new MockMultipartFile("product", "", "application/json", "{\"title\":".getBytes()))
+                        .file(imagePart()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("이미지 없이 상품을 등록할 수 없다")
+    void createProduct_rejectsMissingImage() throws Exception {
+        authenticate(1L);
+
+        mockMvc.perform(multipart("/api/products").file(productPart()))
                 .andExpect(status().isBadRequest());
     }
 
@@ -220,6 +247,14 @@ class ProductControllerTest {
                   "address": "서울시 동대문구"
                 }
                 """;
+    }
+
+    private MockMultipartFile productPart() {
+        return new MockMultipartFile("product", "", "application/json", validRequestJson().getBytes());
+    }
+
+    private MockMultipartFile imagePart() {
+        return new MockMultipartFile("image", "photo.jpg", "image/jpeg", new byte[]{1});
     }
 
     private String updateRequestJson() {

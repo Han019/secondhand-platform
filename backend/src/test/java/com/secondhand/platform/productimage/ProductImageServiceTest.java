@@ -5,6 +5,7 @@ import com.secondhand.platform.product.Product;
 import com.secondhand.platform.product.ProductRepository;
 import com.secondhand.platform.productimage.config.ImageProperties;
 import com.secondhand.platform.user.User;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,11 +13,22 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Optional;
 
@@ -32,7 +44,16 @@ class ProductImageServiceTest {
     private ProductImageRepository productImageRepository;
 
     @Mock
+    private PendingImageDeletionRepository pendingImageDeletionRepository;
+
+    @Mock
+    private ProductImageCleanupService productImageCleanupService;
+
+    @Mock
     private S3Client s3Client;
+
+    @Mock
+    private S3Presigner s3Presigner;
 
     @Mock
     private ProductRepository productRepository;
@@ -57,26 +78,100 @@ class ProductImageServiceTest {
                 imageProperties,
                 productImageRepository,
                 s3Client,
-                productRepository
+                productRepository,
+                s3Presigner,
+                pendingImageDeletionRepository,
+                productImageCleanupService
         );
     }
 
+    @AfterEach
+    void clearTransactionSynchronization() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
     @Test
-    @DisplayName("상품 소유자는 해당 상품에 속한 이미지 한 장을 삭제할 수 있다")
+    @DisplayName("두 번째 이미지 업로드 실패 시 롤백 콜백이 S3 파일을 정리한다")
+    void uploadImages_cleansUpAfterRollback() throws Exception {
+        givenOwnedProduct(10L, 1L);
+        MockMultipartFile image = image();
+        when(s3Client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
+                .thenReturn(PutObjectResponse.builder().build())
+                .thenThrow(S3Exception.builder().message("upload failed").build());
+        when(s3Client.deleteObjects(any(DeleteObjectsRequest.class)))
+                .thenReturn(DeleteObjectsResponse.builder().build());
+        TransactionSynchronizationManager.initSynchronization();
+
+        assertThatThrownBy(() -> productImageService.uploadImages(List.of(image, image), 10L, 1L))
+                .isInstanceOf(S3Exception.class);
+        TransactionSynchronizationManager.getSynchronizations().forEach(
+                synchronization -> synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+        ArgumentCaptor<DeleteObjectsRequest> requestCaptor = ArgumentCaptor.forClass(DeleteObjectsRequest.class);
+        verify(s3Client).deleteObjects(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().delete().objects()).hasSize(2);
+        verify(productImageRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("추가 업로드는 같은 상품의 기존 최대 순서 다음부터 저장한다")
+    void uploadImages_startsAfterExistingSortOrder() throws Exception {
+        givenOwnedProduct(10L, 1L);
+        ProductImage last = mock(ProductImage.class);
+        when(last.getSortOrder()).thenReturn(2);
+        when(productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(10L))
+                .thenReturn(List.of(last));
+        TransactionSynchronizationManager.initSynchronization();
+
+        productImageService.uploadImages(List.of(image()), 10L, 1L);
+
+        verify(productImageRepository).saveAll(argThat(saved ->
+                saved.iterator().next().getSortOrder() == 3));
+    }
+
+    @Test
+    @DisplayName("순서 변경은 같은 상품의 이미지 ID 전체를 요구하고 0부터 다시 매긴다")
+    void reorderImages_reordersAllOwnedImages() {
+        givenOwnedProduct(10L, 1L);
+        ProductImage first = new ProductImage(product, "first.jpg", 0);
+        ProductImage second = new ProductImage(product, "second.jpg", 2);
+        ReflectionTestUtils.setField(first, "id", 100L);
+        ReflectionTestUtils.setField(second, "id", 200L);
+        when(productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(10L))
+                .thenReturn(List.of(first, second));
+
+        assertThatThrownBy(() -> productImageService.reorderImages(10L, 1L, List.of(200L, 999L)))
+                .isInstanceOf(com.secondhand.platform.common.exception.InvalidProductImageRequestException.class);
+        assertThat(first.getSortOrder()).isEqualTo(0);
+        assertThat(second.getSortOrder()).isEqualTo(2);
+
+        productImageService.reorderImages(10L, 1L, List.of(200L, 100L));
+
+        assertThat(second.getSortOrder()).isEqualTo(0);
+        assertThat(first.getSortOrder()).isEqualTo(1);
+        verifyNoInteractions(s3Client);
+    }
+
+    @Test
+    @DisplayName("이미지 한 장은 DB에서 지운 뒤 커밋 후 S3 삭제를 요청한다")
     void deleteImage_deletesOwnedProductImage() {
         givenOwnedProduct(10L, 1L);
         when(productImageRepository.findByIdAndProduct_Id(100L, 10L))
                 .thenReturn(Optional.of(productImage));
         when(productImage.getImagePath()).thenReturn("products/image-1.jpg");
+        TransactionSynchronizationManager.initSynchronization();
 
         productImageService.deleteImage(10L, 1L, 100L);
 
-        ArgumentCaptor<DeleteObjectRequest> requestCaptor =
-                ArgumentCaptor.forClass(DeleteObjectRequest.class);
-        verify(s3Client).deleteObject(requestCaptor.capture());
-        assertThat(requestCaptor.getValue().bucket()).isEqualTo("product-images");
-        assertThat(requestCaptor.getValue().key()).isEqualTo("products/image-1.jpg");
-        verify(productImageRepository).delete(productImage);
+        verify(pendingImageDeletionRepository).saveAll(argThat(pending ->
+                pending.iterator().next().getImagePath().equals("products/image-1.jpg")));
+        verify(productImageRepository).deleteAllInBatch(List.of(productImage));
+        verifyNoInteractions(s3Client, productImageCleanupService);
+
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        verify(productImageCleanupService).deletePendingImage("products/image-1.jpg");
     }
 
     @Test
@@ -94,7 +189,7 @@ class ProductImageServiceTest {
     }
 
     @Test
-    @DisplayName("상품의 전체 이미지는 Storage 요청 한 번과 DB 일괄 삭제로 제거한다")
+    @DisplayName("전체 이미지 삭제는 커밋 후에만 S3 삭제를 요청한다")
     void deleteImages_deletesStorageAndDatabaseInBatch() {
         ProductImage first = mock(ProductImage.class);
         ProductImage second = mock(ProductImage.class);
@@ -105,22 +200,19 @@ class ProductImageServiceTest {
         when(second.getImagePath()).thenReturn("products/image-2.jpg");
         when(productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(10L))
                 .thenReturn(images);
-        when(s3Client.deleteObjects(any(DeleteObjectsRequest.class)))
-                .thenReturn(DeleteObjectsResponse.builder().build());
+        TransactionSynchronizationManager.initSynchronization();
 
         productImageService.deleteImages(10L, 1L);
 
-        ArgumentCaptor<DeleteObjectsRequest> requestCaptor =
-                ArgumentCaptor.forClass(DeleteObjectsRequest.class);
-        verify(s3Client, times(1)).deleteObjects(requestCaptor.capture());
-        assertThat(requestCaptor.getValue().delete().objects())
-                .extracting(object -> object.key())
-                .containsExactly("products/image-1.jpg", "products/image-2.jpg");
+        verifyNoInteractions(s3Client, productImageCleanupService);
         verify(productImageRepository).deleteAllInBatch(images);
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        verify(productImageCleanupService).deletePendingImage("products/image-1.jpg");
+        verify(productImageCleanupService).deletePendingImage("products/image-2.jpg");
     }
 
     @Test
-    @DisplayName("선택한 여러 이미지는 Storage 요청 한 번과 DB 일괄 삭제로 제거한다")
+    @DisplayName("선택한 여러 이미지는 롤백하면 S3에서 삭제하지 않는다")
     void deleteImages_deletesSelectedImagesInBatch() {
         ProductImage first = mock(ProductImage.class);
         ProductImage second = mock(ProductImage.class);
@@ -131,13 +223,29 @@ class ProductImageServiceTest {
         when(second.getImagePath()).thenReturn("products/image-2.jpg");
         when(productImageRepository.findAllByProduct_IdAndIdIn(10L, List.of(100L, 200L)))
                 .thenReturn(images);
-        when(s3Client.deleteObjects(any(DeleteObjectsRequest.class)))
-                .thenReturn(DeleteObjectsResponse.builder().build());
+        TransactionSynchronizationManager.initSynchronization();
 
         productImageService.deleteImages(10L, 1L, List.of(100L, 200L));
 
-        verify(s3Client, times(1)).deleteObjects(any(DeleteObjectsRequest.class));
         verify(productImageRepository).deleteAllInBatch(images);
+        TransactionSynchronizationManager.getSynchronizations().forEach(
+                synchronization -> synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        verifyNoInteractions(s3Client, productImageCleanupService);
+    }
+
+    @Test
+    @DisplayName("S3 삭제에 실패해도 다음 이미지 정리를 계속 시도한다")
+    void retryPendingImageDeletions_continuesAfterFailure() {
+        when(pendingImageDeletionRepository.findAll()).thenReturn(List.of(
+                new PendingImageDeletion("products/first.jpg"),
+                new PendingImageDeletion("products/second.jpg")));
+        doThrow(new IllegalStateException("S3 unavailable"))
+                .when(productImageCleanupService).deletePendingImage("products/first.jpg");
+
+        productImageService.retryPendingImageDeletions();
+
+        verify(productImageCleanupService).deletePendingImage("products/first.jpg");
+        verify(productImageCleanupService).deletePendingImage("products/second.jpg");
     }
 
     @Test
@@ -172,5 +280,11 @@ class ProductImageServiceTest {
         when(productRepository.findById(productId)).thenReturn(Optional.of(product));
         when(product.getSeller()).thenReturn(seller);
         when(seller.getId()).thenReturn(userId);
+    }
+
+    private MockMultipartFile image() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), "png", bytes);
+        return new MockMultipartFile("image", "photo.png", "image/png", bytes.toByteArray());
     }
 }

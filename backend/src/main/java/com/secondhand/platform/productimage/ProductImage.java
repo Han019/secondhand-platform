@@ -29,4 +29,8 @@ public class ProductImage {
        this.imagePath = imagePath;
        this.sortOrder = sortOrder;
     }
+
+    void changeSortOrder(int sortOrder) {
+        this.sortOrder = sortOrder;
+    }
 }

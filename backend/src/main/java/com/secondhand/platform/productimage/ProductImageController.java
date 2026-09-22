@@ -29,6 +29,16 @@ public class ProductImageController {
         return ResponseEntity.status(HttpStatus.CREATED).body(new ImageResponse(imagePaths));
     }
 
+    @PatchMapping("/order")
+    public ResponseEntity<Void> reorderImages(
+            @PathVariable Long productId,
+            @RequestBody List<Long> imageIds,
+            @AuthenticationPrincipal Long userId
+    ) {
+        productImageService.reorderImages(productId, userId, imageIds);
+        return ResponseEntity.noContent().build();
+    }
+
     @DeleteMapping("/{imageId}")//단일 건수 지우기
     public ResponseEntity<Void> deleteImage(
             @PathVariable Long productId,
