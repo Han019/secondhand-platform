@@ -8,6 +8,8 @@ import com.secondhand.platform.product.dto.ProductResponse;
 import com.secondhand.platform.product.dto.ProductStatusRequest;
 import com.secondhand.platform.product.dto.ProductUpdateRequest;
 import com.secondhand.platform.productimage.ProductImageService;
+import com.secondhand.platform.productimage.ProductImage;
+import com.secondhand.platform.productimage.ProductImageRepository;
 import com.secondhand.platform.user.User;
 import com.secondhand.platform.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +19,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Optional;
@@ -38,22 +48,31 @@ class ProductServiceTest {
     private ProductImageService productImageService;
 
     @Mock
+    private ProductImageRepository productImageRepository;
+
+    @Mock
     private User seller;
 
     private ProductService productService;
 
     @BeforeEach
     void setUp() {
-        productService = new ProductService(userRepository, productRepository, productImageService);
+        productService = new ProductService(userRepository, productRepository, productImageService, productImageRepository);
     }
 
     @Test
     @DisplayName("상품 등록 시 로그인 사용자를 판매자로 저장한다")
-    void createProduct_savesProductWithAuthenticatedSeller() {
+    void createProduct_savesProductWithAuthenticatedSeller() throws Exception {
         ProductCreateRequest request = request("자전거", "상태 좋습니다", 100_000L);
+        List<MultipartFile> images = List.of(new MockMultipartFile("image", "photo.jpg", "image/jpeg", new byte[]{1}));
         when(userRepository.findById(1L)).thenReturn(Optional.of(seller));
+        when(productRepository.save(any(Product.class))).thenAnswer(invocation -> {
+            Product product = invocation.getArgument(0);
+            ReflectionTestUtils.setField(product, "id", 10L);
+            return product;
+        });
 
-        productService.createProduct(request, 1L);
+        productService.createProduct(request, images, 1L);
 
         ArgumentCaptor<Product> captor = ArgumentCaptor.forClass(Product.class);
         verify(productRepository).save(captor.capture());
@@ -64,6 +83,7 @@ class ProductServiceTest {
         assertThat(saved.getPrice()).isEqualTo(100_000L);
         assertThat(saved.getStatus()).isEqualTo(ProductStatus.ON_SALE);
         assertThat(saved.getAddress()).isEqualTo("서울시 동대문구");
+        verify(productImageService).uploadImages(images, 10L, 1L);
     }
 
     @Test
@@ -71,11 +91,12 @@ class ProductServiceTest {
     void createProduct_rejectsUnknownSeller() {
         when(userRepository.findById(999L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> productService.createProduct(request("상품", "설명", 1_000L), 999L))
+        assertThatThrownBy(() -> productService.createProduct(request("상품", "설명", 1_000L), List.of(), 999L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("없는 사용자입니다.");
 
         verifyNoInteractions(productRepository);
+        verifyNoInteractions(productImageService);
     }
 
     @Test
@@ -162,21 +183,36 @@ class ProductServiceTest {
     void getProducts_mapsProductsToResponses() {
         Product first = product("자전거", "설명1", 100_000L);
         Product second = product("노트북", "설명2", 500_000L);
-        when(productRepository.findAll()).thenReturn(List.of(first, second));
+        Pageable pageable = PageRequest.of(0, 10, Sort.by("id").descending());
+        when(productRepository.findAll(pageable)).thenReturn(new PageImpl<>(List.of(first, second), pageable, 2));
 
-        List<ProductResponse> responses = productService.getProducts();
+        Page<ProductResponse> responses = productService.getProducts(null, pageable);
 
-        assertThat(responses).hasSize(2);
-        assertThat(responses).extracting(ProductResponse::title)
+        assertThat(responses.getTotalElements()).isEqualTo(2);
+        assertThat(responses.getContent()).extracting(ProductResponse::title)
                 .containsExactly("자전거", "노트북");
     }
 
     @Test
     @DisplayName("등록된 상품이 없으면 빈 목록을 반환한다")
     void getProducts_returnsEmptyList() {
-        when(productRepository.findAll()).thenReturn(List.of());
+        Pageable pageable = PageRequest.of(0, 10);
+        when(productRepository.findAll(pageable)).thenReturn(Page.empty(pageable));
 
-        assertThat(productService.getProducts()).isEmpty();
+        assertThat(productService.getProducts(null, pageable).getContent()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("검색어를 정리하고 정렬 조건과 함께 Repository에 전달한다")
+    void getProducts_searchesWithPageable() {
+        Pageable pageable = PageRequest.of(0, 10, Sort.by("price").ascending());
+        when(productRepository.findByTitleContainingOrDescriptionContaining("자전거", "자전거", pageable))
+                .thenReturn(new PageImpl<>(List.of(product("자전거", "설명", 100_000L)), pageable, 1));
+
+        Page<ProductResponse> responses = productService.getProducts(" 자전거 ", pageable);
+
+        assertThat(responses.getContent()).extracting(ProductResponse::title).containsExactly("자전거");
+        verify(productRepository).findByTitleContainingOrDescriptionContaining("자전거", "자전거", pageable);
     }
 
     @Test
@@ -188,6 +224,14 @@ class ProductServiceTest {
         when(seller.getMannerScore()).thenReturn(36.5);
         Product product = product("자전거", "상태 좋습니다", 100_000L);
         when(productRepository.findById(10L)).thenReturn(Optional.of(product));
+        ProductImage first = new ProductImage(product, "products/first.jpg", 0);
+        ProductImage second = new ProductImage(product, "products/second.jpg", 1);
+        ReflectionTestUtils.setField(first, "id", 100L);
+        ReflectionTestUtils.setField(second, "id", 200L);
+        when(productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(10L))
+                .thenReturn(List.of(first, second));
+        when(productImageService.generateSignedUrl("products/first.jpg")).thenReturn("https://example.com/first.jpg");
+        when(productImageService.generateSignedUrl("products/second.jpg")).thenReturn("https://example.com/second.jpg");
 
         ProductDetailResponse response = productService.getProduct(10L);
 
@@ -202,6 +246,10 @@ class ProductServiceTest {
         assertThat(response.seller().nickname()).isEqualTo("판매자");
         assertThat(response.seller().profileImage()).isEqualTo("profile.jpg");
         assertThat(response.seller().mannerScore()).isEqualTo(36.5);
+        assertThat(response.images()).extracting(ProductDetailResponse.ImageResponse::id)
+                .containsExactly(100L, 200L);
+        assertThat(response.images()).extracting(ProductDetailResponse.ImageResponse::url)
+                .containsExactly("https://example.com/first.jpg", "https://example.com/second.jpg");
     }
 
     @Test

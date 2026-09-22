@@ -1,6 +1,10 @@
 package com.secondhand.platform.product;
 
 import com.secondhand.platform.auth.jwt.JwtTokenProvider;
+import com.secondhand.platform.productimage.ProductImageRepository;
+import com.secondhand.platform.productimage.ProductImage;
+import com.secondhand.platform.productimage.ProductImageService;
+import com.secondhand.platform.productimage.PendingImageDeletionRepository;
 import com.secondhand.platform.user.User;
 import com.secondhand.platform.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,19 +13,36 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
 @SpringBootTest(properties = {
         "jwt.secret=product-api-test-secret-key-at-least-32-bytes",
-        "resend.api-key=test-key"
+        "resend.api-key=test-key",
+        "supabase.endpoint=http://localhost:9000",
+        "supabase.region=us-east-1",
+        "supabase.access-key=test-key",
+        "supabase.secret-key=test-secret",
+        "supabase.bucket=test-bucket"
 })
 @AutoConfigureMockMvc
 class ProductSecurityIntegrationTest {
@@ -36,6 +57,18 @@ class ProductSecurityIntegrationTest {
     private ProductRepository productRepository;
 
     @Autowired
+    private ProductImageRepository productImageRepository;
+
+    @Autowired
+    private PendingImageDeletionRepository pendingImageDeletionRepository;
+
+    @Autowired
+    private ProductImageService productImageService;
+
+    @MockitoBean
+    private S3Client s3Client;
+
+    @Autowired
     private JwtTokenProvider jwtTokenProvider;
 
     private User seller;
@@ -43,6 +76,8 @@ class ProductSecurityIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        pendingImageDeletionRepository.deleteAll();
+        productImageRepository.deleteAll();
         productRepository.deleteAll();
         userRepository.deleteAll();
         seller = userRepository.save(
@@ -56,6 +91,24 @@ class ProductSecurityIntegrationTest {
     void getProducts_allowsAnonymousAccess() throws Exception {
         mockMvc.perform(get("/api/products"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("상품 검색은 가격순으로 정렬한 결과와 전체 건수를 반환한다")
+    void getProducts_searchesAndSortsBeforePaging() throws Exception {
+        productRepository.save(new Product(seller, "아이패드 고가", "설명", 200_000L, null, null, "서울"));
+        productRepository.save(new Product(seller, "아이패드 저가", "설명", 100_000L, null, null, "서울"));
+        productRepository.save(new Product(seller, "노트북", "설명", 50_000L, null, null, "서울"));
+
+        mockMvc.perform(get("/api/products")
+                        .param("keyword", "아이패드")
+                        .param("sort", "price,asc")
+                        .param("page", "0")
+                        .param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].title").value("아이패드 저가"))
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.totalPages").value(2));
     }
 
     @Test
@@ -93,29 +146,29 @@ class ProductSecurityIntegrationTest {
     @Test
     @DisplayName("상품 등록은 인증되지 않은 요청을 401로 거부한다")
     void createProduct_rejectsAnonymousAccess() throws Exception {
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(validRequestJson()))
+        mockMvc.perform(multipart("/api/products")
+                        .file(productPart())
+                        .file(imagePart()))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("유효하지 않은 Bearer Token은 401로 거부한다")
     void createProduct_rejectsInvalidAccessToken() throws Exception {
-        mockMvc.perform(post("/api/products")
+        mockMvc.perform(multipart("/api/products")
                         .header("Authorization", "Bearer invalid-token")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(validRequestJson()))
+                        .file(productPart())
+                        .file(imagePart()))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("유효한 Access Token으로 상품을 등록하면 DB에 저장된다")
     void createProduct_withValidAccessTokenPersistsProduct() throws Exception {
-        mockMvc.perform(post("/api/products")
+        mockMvc.perform(multipart("/api/products")
                         .header("Authorization", "Bearer " + accessToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(validRequestJson()))
+                        .file(productPart())
+                        .file(imagePart()))
                 .andExpect(status().isCreated());
 
         assertThat(productRepository.findAll())
@@ -125,6 +178,7 @@ class ProductSecurityIntegrationTest {
                     assertThat(product.getTitle()).isEqualTo("자전거");
                     assertThat(product.getPrice()).isEqualTo(100_000L);
                 });
+        assertThat(productImageRepository.findAll()).hasSize(1);
     }
 
     @Test
@@ -156,6 +210,28 @@ class ProductSecurityIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    @DisplayName("S3 삭제가 실패해도 DB 삭제를 확정하고 대기 기록을 재시도한다")
+    void deleteImage_retriesAfterS3Failure() throws Exception {
+        Product product = productRepository.save(new Product(
+                seller, "자전거", "설명", 100_000L, 37.5, 127.0, "서울"));
+        ProductImage image = productImageRepository.save(
+                new ProductImage(product, "products/retry.jpg", 0));
+        doThrow(new IllegalStateException("S3 unavailable"))
+                .when(s3Client).deleteObject(any(DeleteObjectRequest.class));
+
+        mockMvc.perform(delete("/api/products/" + product.getId() + "/images/" + image.getId())
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isNoContent());
+
+        assertThat(productImageRepository.findById(image.getId())).isEmpty();
+        assertThat(pendingImageDeletionRepository.findById("products/retry.jpg")).isPresent();
+
+        reset(s3Client);
+        productImageService.retryPendingImageDeletions();
+        assertThat(pendingImageDeletionRepository.findById("products/retry.jpg")).isEmpty();
+    }
+
     private String validRequestJson() {
         return """
                 {
@@ -167,5 +243,15 @@ class ProductSecurityIntegrationTest {
                   "address": "서울시 동대문구"
                 }
                 """;
+    }
+
+    private MockMultipartFile productPart() {
+        return new MockMultipartFile("product", "", "application/json", validRequestJson().getBytes());
+    }
+
+    private MockMultipartFile imagePart() throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), "png", bytes);
+        return new MockMultipartFile("image", "photo.png", "image/png", bytes.toByteArray());
     }
 }

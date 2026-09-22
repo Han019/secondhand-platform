@@ -11,12 +11,14 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
@@ -51,6 +53,19 @@ class ProductImageControllerTest {
 
         verify(productImageService)
                 .deleteImages(10L, 1L, List.of(100L, 200L));
+    }
+
+    @Test
+    @DisplayName("이미지 순서 변경은 ID 순서를 서비스에 전달하고 204를 반환한다")
+    void reorderImages_returnsNoContent() throws Exception {
+        authenticate(1L);
+
+        mockMvc.perform(patch("/api/products/10/images/order")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("[200,100]"))
+                .andExpect(status().isNoContent());
+
+        verify(productImageService).reorderImages(10L, 1L, List.of(200L, 100L));
     }
 
     private void authenticate(Long userId) {

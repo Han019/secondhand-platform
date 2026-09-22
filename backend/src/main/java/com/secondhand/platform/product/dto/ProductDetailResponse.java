@@ -4,6 +4,7 @@ import com.secondhand.platform.product.Product;
 import com.secondhand.platform.product.ProductStatus;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record ProductDetailResponse(
         Long id,
@@ -16,9 +17,10 @@ public record ProductDetailResponse(
         String address,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        SellerResponse seller
+        SellerResponse seller,
+        List<ImageResponse> images
 ) {
-    public static ProductDetailResponse from(Product product) {
+    public static ProductDetailResponse from(Product product, List<ImageResponse> images) {
         return new ProductDetailResponse(
                 product.getId(),
                 product.getTitle(),
@@ -30,8 +32,12 @@ public record ProductDetailResponse(
                 product.getAddress(),
                 product.getCreatedAt(),
                 product.getUpdatedAt(),
-                SellerResponse.from(product)
+                SellerResponse.from(product),
+                images
         );
+    }
+
+    public record ImageResponse(Long id, String url) {
     }
 
     public record SellerResponse(
