@@ -65,6 +65,10 @@ public class ProductImageService {
         if (images.size() > 10) {
             throw new InvalidProductImageRequestException("이미지는 최대 10장까지 첨부 가능합니다.");
         }
+        List<ProductImage> existing = productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(productId);
+        if (existing.size() + images.size() > 10) {
+            throw new InvalidProductImageRequestException("상품 이미지는 총 10장까지 첨부 가능합니다.");
+        }
         List<String> imagePaths = new ArrayList<>();
         List<ProductImage> productImages = new ArrayList<>();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -76,8 +80,7 @@ public class ProductImageService {
             }
         });
 
-        List<ProductImage> existing = productImageRepository.findAllByProduct_IdOrderBySortOrderAsc(productId);
-        // ponytail: 같은 상품의 동시 업로드는 순서가 겹칠 수 있으므로 필요해지면 상품 행에 잠금을 겁니다.
+        // ponytail: 같은 상품의 동시 업로드는 수량 제한과 순서가 겹칠 수 있으므로 필요해지면 상품 행에 잠금을 겁니다.
         int i = existing.isEmpty() ? 0 : existing.get(existing.size() - 1).getSortOrder() + 1;
         for (MultipartFile image : images) {
             String imagePath = uploadImage(image, imagePaths);
@@ -239,7 +242,7 @@ public class ProductImageService {
 
         List<String> imagePaths = productImages.stream().map(ProductImage::getImagePath).toList();
         pendingImageDeletionRepository.saveAll(imagePaths.stream().map(PendingImageDeletion::new).toList());
-        productImageRepository.deleteAllInBatch(productImages);
+        productImageRepository.deleteAll(productImages);
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {

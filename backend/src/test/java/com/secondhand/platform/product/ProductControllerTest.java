@@ -59,12 +59,13 @@ class ProductControllerTest {
     @DisplayName("POST /api/products는 상품을 등록하고 201을 반환한다")
     void createProduct_returnsCreated() throws Exception {
         authenticate(1L);
+        when(productService.createProduct(any(), any(), eq(1L))).thenReturn(10L);
 
         mockMvc.perform(multipart("/api/products")
                         .file(productPart())
                         .file(imagePart()))
                 .andExpect(status().isCreated())
-                .andExpect(content().string(""));
+                .andExpect(jsonPath("$.productId").value(10));
 
         verify(productService).createProduct(any(), any(), eq(1L));
     }
@@ -74,7 +75,7 @@ class ProductControllerTest {
     void getProducts_returnsProducts() throws Exception {
         Pageable pageable = PageRequest.of(0, 10, Sort.by("price").ascending());
         when(productService.getProducts(eq("자전거"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
-                new ProductResponse(10L, "자전거", 100_000L, ProductStatus.ON_SALE, "서울시 동대문구")
+                new ProductResponse(10L, "자전거", 100_000L, ProductStatus.ON_SALE, "서울시 동대문구", "https://example.com/image.jpg")
         ), pageable, 1));
 
         mockMvc.perform(get("/api/products").param("keyword", "자전거").param("sort", "price,asc"))
@@ -83,6 +84,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.content[0].title").value("자전거"))
                 .andExpect(jsonPath("$.content[0].price").value(100_000))
                 .andExpect(jsonPath("$.content[0].status").value("ON_SALE"))
+                .andExpect(jsonPath("$.content[0].imageUrl").value("https://example.com/image.jpg"))
                 .andExpect(jsonPath("$.totalElements").value(1));
 
         verify(productService).getProducts("자전거", pageable);

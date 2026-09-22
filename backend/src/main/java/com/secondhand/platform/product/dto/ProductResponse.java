@@ -8,15 +8,17 @@ public record ProductResponse(
         String title,
         Long price,
         ProductStatus status,
-        String address
+        String address,
+        String imageUrl
 ) {
-    public static ProductResponse from(Product product) {
+    public static ProductResponse from(Product product,String imageUrl) {
         return new ProductResponse(
                 product.getId(),
                 product.getTitle(),
                 product.getPrice(),
                 product.getStatus(),
-                product.getAddress()
+                product.getAddress(),
+                imageUrl
         );
     }
 }

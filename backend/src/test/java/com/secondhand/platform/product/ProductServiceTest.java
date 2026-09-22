@@ -72,7 +72,7 @@ class ProductServiceTest {
             return product;
         });
 
-        productService.createProduct(request, images, 1L);
+        Long productId = productService.createProduct(request, images, 1L);
 
         ArgumentCaptor<Product> captor = ArgumentCaptor.forClass(Product.class);
         verify(productRepository).save(captor.capture());
@@ -83,6 +83,7 @@ class ProductServiceTest {
         assertThat(saved.getPrice()).isEqualTo(100_000L);
         assertThat(saved.getStatus()).isEqualTo(ProductStatus.ON_SALE);
         assertThat(saved.getAddress()).isEqualTo("서울시 동대문구");
+        assertThat(productId).isEqualTo(10L);
         verify(productImageService).uploadImages(images, 10L, 1L);
     }
 
@@ -191,6 +192,25 @@ class ProductServiceTest {
         assertThat(responses.getTotalElements()).isEqualTo(2);
         assertThat(responses.getContent()).extracting(ProductResponse::title)
                 .containsExactly("자전거", "노트북");
+    }
+
+    @Test
+    @DisplayName("상품 목록에 정렬 순서가 첫 번째인 이미지의 Signed URL을 포함한다")
+    void getProducts_includesFirstImageUrl() {
+        Product product = product("자전거", "설명", 100_000L);
+        ReflectionTestUtils.setField(product, "id", 10L);
+        ProductImage image = new ProductImage(product, "products/first.jpg", 0);
+        Pageable pageable = PageRequest.of(0, 10);
+        when(productRepository.findAll(pageable)).thenReturn(new PageImpl<>(List.of(product), pageable, 1));
+        when(productImageRepository.findFirstByProduct_IdOrderBySortOrderAsc(10L))
+                .thenReturn(Optional.of(image));
+        when(productImageService.generateSignedUrl("products/first.jpg"))
+                .thenReturn("https://example.com/first.jpg");
+
+        Page<ProductResponse> responses = productService.getProducts(null, pageable);
+
+        assertThat(responses.getContent().getFirst().imageUrl())
+                .isEqualTo("https://example.com/first.jpg");
     }
 
     @Test
